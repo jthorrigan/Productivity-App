@@ -39,19 +39,9 @@ def save_df(df_local, path=DATA_FILE):
     df_to_save["Due Date"] = df_to_save["Due Date"].apply(lambda d: d.isoformat() if isinstance(d, date) else "")
     df_to_save.to_csv(path, index=False)
 
-def mark_done(task_id):
-    df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if mask.any():
-        current = df.loc[mask, "Done"].iat[0]
-        df.loc[mask, "Done"] = not current
-        save_df(df)
-        st.experimental_rerun()
-
 def set_done_from_checkbox(task_id):
     """Callback reads the checkbox state from st.session_state and persists it."""
     checkbox_key = f"check_{task_id}"
-    # Read the current checkbox value from session_state (False if not present)
     new_value = st.session_state.get(checkbox_key, False)
     # Ensure session state df exists
     if "df" not in st.session_state:
@@ -75,6 +65,26 @@ def delete_task(task_id=None, *args, **kwargs):
     save_df(st.session_state["df"])
     st.experimental_rerun()
 
+def save_edits(task_id, new_task, new_sub1, new_sub2, new_due):
+    """Persist edits for a given task id."""
+    if "df" not in st.session_state:
+        st.session_state["df"] = load_df()
+    df = st.session_state["df"]
+    mask = df["id"] == task_id
+    if not mask.any():
+        st.warning("Task not found (it may have been deleted).")
+        return
+    # Assign new values
+    df.loc[mask, "Task"] = new_task
+    df.loc[mask, "Subtask 1"] = new_sub1
+    df.loc[mask, "Subtask 2"] = new_sub2
+    # new_due is a date object from Streamlit; store as date
+    df.loc[mask, "Due Date"] = pd.to_datetime(new_due).date() if new_due else ""
+    st.session_state["df"] = df
+    save_df(st.session_state["df"])
+    st.success("Task updated.")
+    st.experimental_rerun()
+
 # Initialize session state
 if "df" not in st.session_state:
     st.session_state["df"] = load_df()
@@ -85,10 +95,10 @@ df = st.session_state["df"]
 with st.sidebar:
     st.header("✨ New Task")
     with st.form("task_form", clear_on_submit=True):
-        task_name = st.text_input("What's the big goal?")
-        sub1 = st.text_input("Sub-task/Detail 1")
-        sub2 = st.text_input("Sub-task/Detail 2")
-        due = st.date_input("Due Date", value=date.today())
+        task_name = st.text_input("What's the big goal?", key="new_task_name")
+        sub1 = st.text_input("Sub-task/Detail 1", key="new_sub1")
+        sub2 = st.text_input("Sub-task/Detail 2", key="new_sub2")
+        due = st.date_input("Due Date", value=date.today(), key="new_due")
 
         if st.form_submit_button("Add to List"):
             if task_name:
@@ -119,19 +129,18 @@ else:
     pending = display_df[display_df["Done"] == False]
     completed = display_df[display_df["Done"] == True]
 
-    st.subheader("📅 Upcoming")
-    for _, row in pending.iterrows():
-        col1, col2 = st.columns([0.08, 0.92])
+    # Helper to render a single task (used for pending and completed)
+    def render_task(row, show_delete=True, allow_edit=True):
         task_id = row["id"]
+        col1, col2 = st.columns([0.08, 0.92])
         # Checkbox to complete (use id as key)
-        checked = col1.checkbox(
+        col1.checkbox(
             "",
             value=bool(row["Done"]),
             key=f"check_{task_id}",
             on_change=set_done_from_checkbox,
             args=(task_id,)
         )
-        # Display Task Details
         with col2:
             due_display = row["Due Date"].isoformat() if isinstance(row["Due Date"], date) else ""
             st.markdown(f"**{row['Task']}** — :calendar: `{due_display}`")
@@ -141,14 +150,35 @@ else:
                         st.write(f"• {row['Subtask 1']}")
                     if row.get("Subtask 2"):
                         st.write(f"• {row['Subtask 2']}")
+            # Edit UI
+            if allow_edit:
+                with st.expander("✏️ Edit Task"):
+                    # Use a form so inputs don't trigger multiple reruns
+                    form_key = f"edit_form_{task_id}"
+                    with st.form(form_key, clear_on_submit=False):
+                        e_task = st.text_input("Task", value=row["Task"], key=f"edit_task_{task_id}")
+                        e_sub1 = st.text_input("Sub-task 1", value=row.get("Subtask 1", ""), key=f"edit_sub1_{task_id}")
+                        e_sub2 = st.text_input("Sub-task 2", value=row.get("Subtask 2", ""), key=f"edit_sub2_{task_id}")
+                        # Ensure due initial value is a date object
+                        initial_due = row["Due Date"] if isinstance(row["Due Date"], date) else date.today()
+                        e_due = st.date_input("Due Date", value=initial_due, key=f"edit_due_{task_id}")
+                        submitted = st.form_submit_button("Save Changes")
+                        if submitted:
+                            save_edits(task_id, e_task, e_sub1, e_sub2, e_due)
+            # Delete button for completed tasks (or allow deletion for any)
+            if show_delete:
+                if st.button("Delete Forever", key=f"del_{task_id}"):
+                    delete_task(task_id)
+
+    st.subheader("📅 Upcoming")
+    for _, row in pending.iterrows():
+        render_task(row, show_delete=True, allow_edit=True)
 
     # --- COMPLETED SECTION ---
     if not completed.empty:
         st.write("---")
         with st.expander("✅ Completed Tasks"):
             for _, row in completed.iterrows():
-                task_id = row["id"]
+                # Show completed tasks with strike-through title
                 st.write(f"~~{row['Task']}~~")
-                # Call delete_task directly to avoid on_click signature issues
-                if st.button("Delete Forever", key=f"del_{task_id}"):
-                    delete_task(task_id)
+                render_task(row, show_delete=True, allow_edit=True)
