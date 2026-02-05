@@ -53,6 +53,9 @@ def set_done_from_checkbox(task_id):
     checkbox_key = f"check_{task_id}"
     # Read the current checkbox value from session_state (False if not present)
     new_value = st.session_state.get(checkbox_key, False)
+    # Ensure session state df exists
+    if "df" not in st.session_state:
+        st.session_state["df"] = load_df()
     df = st.session_state["df"]
     mask = df["id"] == task_id
     if mask.any():
@@ -60,7 +63,13 @@ def set_done_from_checkbox(task_id):
         save_df(df)
         st.experimental_rerun()
 
-def delete_task(task_id):
+def delete_task(task_id=None, *args, **kwargs):
+    # Be defensive: ensure session state df exists
+    if "df" not in st.session_state:
+        st.session_state["df"] = load_df()
+    if task_id is None:
+        # Nothing to delete
+        return
     df = st.session_state["df"]
     st.session_state["df"] = df[df["id"] != task_id].reset_index(drop=True)
     save_df(st.session_state["df"])
@@ -115,7 +124,6 @@ else:
         col1, col2 = st.columns([0.08, 0.92])
         task_id = row["id"]
         # Checkbox to complete (use id as key)
-        # Use the returned value to set Done; use on_change to persist and rerun
         checked = col1.checkbox(
             "",
             value=bool(row["Done"]),
@@ -141,5 +149,6 @@ else:
             for _, row in completed.iterrows():
                 task_id = row["id"]
                 st.write(f"~~{row['Task']}~~")
-                if st.button("Delete Forever", key=f"del_{task_id}", on_click=delete_task, args=(task_id,)):
-                    pass
+                # Call delete_task directly to avoid on_click signature issues
+                if st.button("Delete Forever", key=f"del_{task_id}"):
+                    delete_task(task_id)
