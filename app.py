@@ -43,13 +43,16 @@ def mark_done(task_id):
     df = st.session_state["df"]
     mask = df["id"] == task_id
     if mask.any():
-        # toggle based on current value (Streamlit's checkbox value will already represent the new state)
         current = df.loc[mask, "Done"].iat[0]
         df.loc[mask, "Done"] = not current
         save_df(df)
         st.experimental_rerun()
 
-def set_done_from_checkbox(task_id, new_value):
+def set_done_from_checkbox(task_id):
+    """Callback reads the checkbox state from st.session_state and persists it."""
+    checkbox_key = f"check_{task_id}"
+    # Read the current checkbox value from session_state (False if not present)
+    new_value = st.session_state.get(checkbox_key, False)
     df = st.session_state["df"]
     mask = df["id"] == task_id
     if mask.any():
@@ -113,7 +116,13 @@ else:
         task_id = row["id"]
         # Checkbox to complete (use id as key)
         # Use the returned value to set Done; use on_change to persist and rerun
-        checked = col1.checkbox("", value=bool(row["Done"]), key=f"check_{task_id}", on_change=set_done_from_checkbox, args=(task_id, True))
+        checked = col1.checkbox(
+            "",
+            value=bool(row["Done"]),
+            key=f"check_{task_id}",
+            on_change=set_done_from_checkbox,
+            args=(task_id,)
+        )
         # Display Task Details
         with col2:
             due_display = row["Due Date"].isoformat() if isinstance(row["Due Date"], date) else ""
