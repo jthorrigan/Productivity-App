@@ -173,9 +173,8 @@ with st.sidebar:
 
     st.write("---")
     st.subheader("View")
-    # compact view toggle
+    # compact view toggle — DO NOT manually assign to session_state here
     compact = st.checkbox("Compact view (tight rows)", value=st.session_state.get("compact_view", False), key="compact_view")
-    st.session_state["compact_view"] = compact
 
     st.caption("Snooze actions: +1d / +3d. Color: 🔴 overdue, 🟡 today, 🟢 upcoming, ⚪ no date")
 
