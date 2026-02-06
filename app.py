@@ -19,11 +19,9 @@ def load_df(path=DATA_FILE):
     if os.path.exists(path):
         df_local = pd.read_csv(path)
         expected = ["id", "Task", "Subtasks", "Due Date", "Done"]
-        # Ensure legacy columns exist if present earlier
         # Normalize missing columns
         for col in expected:
             if col not in df_local.columns:
-                # For Subtasks we will construct below
                 if col == "Subtasks":
                     df_local[col] = ""
                 else:
@@ -52,10 +50,8 @@ def load_df(path=DATA_FILE):
                 # Stored as JSON string
                 try:
                     parsed = json.loads(subs_cell)
-                    # Ensure structure: list of dicts
                     if isinstance(parsed, list):
                         for s in parsed:
-                            # normalize keys
                             sid = s.get("id") if isinstance(s, dict) and s.get("id") else uuid.uuid4().hex
                             text = s.get("text") if isinstance(s, dict) else str(s)
                             done = bool(s.get("done")) if isinstance(s, dict) and "done" in s else False
@@ -74,11 +70,9 @@ def load_df(path=DATA_FILE):
                 for text in legacy:
                     subs.append({"id": uuid.uuid4().hex, "text": text, "done": False})
             subtasks_list.append(subs)
-        # assign normalized Subtasks column
         df_local["Subtasks"] = subtasks_list
         return df_local
     else:
-        # empty df with Subtasks as empty lists
         df = pd.DataFrame(columns=["id", "Task", "Subtasks", "Due Date", "Done"])
         return df
 
@@ -86,17 +80,14 @@ def load_df(path=DATA_FILE):
 def save_df(df_local, path=DATA_FILE):
     """Serialize Subtasks as JSON strings and Due Date as ISO before saving CSV."""
     df_to_save = df_local.copy()
-    # Ensure Subtasks are serialized
     def serialize_subs(cell):
         if isinstance(cell, list):
-            # Only keep non-empty text subtasks
             cleaned = []
             for s in cell:
                 text = s.get("text", "") if isinstance(s, dict) else str(s)
                 if text and str(text).strip():
                     cleaned.append({"id": s.get("id", uuid.uuid4().hex), "text": text, "done": bool(s.get("done", False))})
             return json.dumps(cleaned, ensure_ascii=False)
-        # If already string (older), keep as-is
         if pd.isna(cell):
             return ""
         if isinstance(cell, str):
@@ -104,7 +95,6 @@ def save_df(df_local, path=DATA_FILE):
         return json.dumps(cell, ensure_ascii=False)
 
     df_to_save["Subtasks"] = df_to_save["Subtasks"].apply(serialize_subs)
-    # Due Date to ISO strings
     df_to_save["Due Date"] = df_to_save["Due Date"].apply(lambda d: d.isoformat() if isinstance(d, date) else "")
     df_to_save.to_csv(path, index=False)
 
@@ -124,12 +114,14 @@ def set_done_from_checkbox(task_id):
     if "df" not in st.session_state:
         st.session_state["df"] = load_df()
     df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if mask.any():
-        df.loc[mask, "Done"] = bool(new_value)
-        st.session_state["df"] = df
-        save_df(df)
-        safe_rerun()
+    idxs = df.index[df["id"] == task_id].tolist()
+    if not idxs:
+        return
+    idx = idxs[0]
+    df.at[idx, "Done"] = bool(new_value)
+    st.session_state["df"] = df
+    save_df(df)
+    safe_rerun()
 
 
 def set_subtask_done(task_id, sub_id):
@@ -139,10 +131,22 @@ def set_subtask_done(task_id, sub_id):
     if "df" not in st.session_state:
         st.session_state["df"] = load_df()
     df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if not mask.any():
+    idxs = df.index[df["id"] == task_id].tolist()
+    if not idxs:
         return
-    subs = df.loc[mask, "Subtasks"].iat[0] or []
+    idx = idxs[0]
+    # Ensure subtasks is a list
+    subs = df.at[idx, "Subtasks"] or []
+    # If subs was stored as a JSON string accidentally, try to parse
+    if isinstance(subs, str) and subs.strip():
+        try:
+            parsed = json.loads(subs)
+            if isinstance(parsed, list):
+                subs = parsed
+            else:
+                subs = []
+        except Exception:
+            subs = []
     changed = False
     for s in subs:
         if s.get("id") == sub_id:
@@ -150,7 +154,7 @@ def set_subtask_done(task_id, sub_id):
             changed = True
             break
     if changed:
-        df.loc[mask, "Subtasks"] = subs
+        df.at[idx, "Subtasks"] = subs
         st.session_state["df"] = df
         save_df(df)
         safe_rerun()
@@ -164,15 +168,21 @@ def add_subtask(task_id, text):
     if "df" not in st.session_state:
         st.session_state["df"] = load_df()
     df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if not mask.any():
+    idxs = df.index[df["id"] == task_id].tolist()
+    if not idxs:
         return
-    subs = df.loc[mask, "Subtasks"].iat[0] or []
+    idx = idxs[0]
+    subs = df.at[idx, "Subtasks"] or []
+    if isinstance(subs, str) and subs.strip():
+        try:
+            parsed = json.loads(subs)
+            subs = parsed if isinstance(parsed, list) else []
+        except Exception:
+            subs = []
     subs.append({"id": uuid.uuid4().hex, "text": text, "done": False})
-    df.loc[mask, "Subtasks"] = subs
+    df.at[idx, "Subtasks"] = subs
     st.session_state["df"] = df
     save_df(df)
-    # clear any input field stored in session_state for this task
     input_key = f"new_sub_input_{task_id}"
     if input_key in st.session_state:
         st.session_state[input_key] = ""
@@ -183,12 +193,19 @@ def delete_subtask(task_id, sub_id):
     if "df" not in st.session_state:
         st.session_state["df"] = load_df()
     df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if not mask.any():
+    idxs = df.index[df["id"] == task_id].tolist()
+    if not idxs:
         return
-    subs = df.loc[mask, "Subtasks"].iat[0] or []
+    idx = idxs[0]
+    subs = df.at[idx, "Subtasks"] or []
+    if isinstance(subs, str) and subs.strip():
+        try:
+            parsed = json.loads(subs)
+            subs = parsed if isinstance(parsed, list) else []
+        except Exception:
+            subs = []
     new_subs = [s for s in subs if s.get("id") != sub_id]
-    df.loc[mask, "Subtasks"] = new_subs
+    df.at[idx, "Subtasks"] = new_subs
     st.session_state["df"] = df
     save_df(df)
     safe_rerun()
@@ -199,12 +216,13 @@ def save_edits(task_id, new_task, new_due):
     if "df" not in st.session_state:
         st.session_state["df"] = load_df()
     df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if not mask.any():
+    idxs = df.index[df["id"] == task_id].tolist()
+    if not idxs:
         st.warning("Task not found.")
         return
-    df.loc[mask, "Task"] = new_task
-    df.loc[mask, "Due Date"] = pd.to_datetime(new_due).date() if new_due else ""
+    idx = idxs[0]
+    df.at[idx, "Task"] = new_task
+    df.at[idx, "Due Date"] = pd.to_datetime(new_due).date() if new_due else ""
     st.session_state["df"] = df
     save_df(df)
     if st.session_state.get("editing") == task_id:
@@ -217,16 +235,17 @@ def snooze_task(task_id, days):
     if "df" not in st.session_state:
         st.session_state["df"] = load_df()
     df = st.session_state["df"]
-    mask = df["id"] == task_id
-    if not mask.any():
+    idxs = df.index[df["id"] == task_id].tolist()
+    if not idxs:
         st.warning("Task not found.")
         return
-    current = df.loc[mask, "Due Date"].iat[0]
+    idx = idxs[0]
+    current = df.at[idx, "Due Date"]
     if isinstance(current, date):
         new_due = current + timedelta(days=days)
     else:
         new_due = date.today() + timedelta(days=days)
-    df.loc[mask, "Due Date"] = new_due
+    df.at[idx, "Due Date"] = new_due
     st.session_state["df"] = df
     save_df(df)
     safe_rerun()
@@ -259,14 +278,13 @@ if "compact_view" not in st.session_state:
 # --- SIDEBAR: INPUT & OPTIONS ---
 with st.sidebar:
     st.header("✨ New Task")
-    # Creation UI uses a multiline text area for subtasks (one per line) — simple and flexible
+    # Creation UI uses a multiline text area for subtasks (one per line)
     with st.form("task_form", clear_on_submit=True):
         task_name = st.text_input("What's the big goal?", key="new_task_name")
         subtasks_text = st.text_area("Sub-tasks (optional, one per line)", key="new_subtasks_area")
         due = st.date_input("Due Date", value=date.today(), key="new_due")
         if st.form_submit_button("Add to List"):
             if task_name:
-                # Build subtasks list from lines
                 subs = []
                 lines = (subtasks_text or "").splitlines()
                 for line in lines:
@@ -336,7 +354,6 @@ else:
                         cols = st.columns([0.03, 0.90, 0.07])
                         cols[0].checkbox("", value=done, key=sub_key, on_change=set_subtask_done, args=(task_id, sid))
                         cols[1].markdown(f"{text}")
-                        # delete subtask button
                         if cols[2].button("✖", key=f"del_sub_{task_id}_{sid}"):
                             delete_subtask(task_id, sid)
             with actions_col:
@@ -349,7 +366,6 @@ else:
                     safe_rerun()
                 if st.button("🗑️", key=f"del_{task_id}"):
                     delete_task(task_id)
-            # add-subtask input (shown under row)
             if st.session_state.get("editing") == task_id:
                 st.text_input("Add subtask", key=f"new_sub_input_{task_id}")
                 if st.button("Add Subtask", key=f"add_sub_{task_id}"):
@@ -362,7 +378,6 @@ else:
             with content_col:
                 due_display = row["Due Date"].isoformat() if isinstance(row["Due Date"], date) else ""
                 st.markdown(f"{status_emoji} **{row['Task']}** — :calendar: `{due_display}`")
-                # show subtasks with checkboxes and delete control
                 if subtasks:
                     for s in subtasks:
                         sid = s.get("id")
@@ -376,14 +391,12 @@ else:
                         with sub_c3:
                             if st.button("✖", key=f"del_sub_{task_id}_{sid}"):
                                 delete_subtask(task_id, sid)
-                # Add new subtask input (immediate add)
                 st.text_input("Add subtask", key=f"new_sub_input_{task_id}")
                 if st.button("Add Subtask", key=f"add_sub_{task_id}"):
                     val = st.session_state.get(f"new_sub_input_{task_id}", "").strip()
                     if val:
                         add_subtask(task_id, val)
 
-                # Inline edit panel for title/due when editing
                 if st.session_state.get("editing") == task_id:
                     with st.form(f"edit_form_{task_id}", clear_on_submit=False):
                         e_task = st.text_input("Task", value=row["Task"], key=f"edit_task_{task_id}")
